@@ -18,3 +18,18 @@
 Жишээ: `"JHN"]["3"]["16"]` → Иохан 3:16-ийн монгол текст.
 
 Одоо зөвхөн цөөн эшлэл дээж байна. Бүтэн 2013 хувилбарыг энд нэмж болно (ном бүрээр, бүлэг, дугаар).
+
+---
+
+## Google Cloud орчуулга (EN → MN)
+
+Англи → Монгол орчуулгад **Cloud Translation API** ашиглана. Нэвтрэл тохируулах:
+
+1. **Cloud Translation API** идэвхжүүлэх: GCP Console → **APIs & Services** → **Enable APIs** → "Cloud Translation API" хайж **Enable**.
+2. **Service account**-д эрх өгөх: **IAM & Admin** → **IAM** → service account-аа олоод **Edit** → **Add another role** → **Cloud Translation API User** нэмнэ. (Эсвэл Service accounts → тухайн account → **Permissions** дээр нэмнэ.)
+3. **Service account JSON** ашиглах: GCP Console → IAM → Service accounts → Key нэмж JSON татаад `.env` дотор:
+   ```bash
+   GOOGLE_APPLICATION_CREDENTIALS=./path/to/service-account.json
+   GOOGLE_CLOUD_PROJECT=your-project-id
+   ```
+4. Эсвэл локал машин дээр: `gcloud auth application-default login` (нэг удаа).

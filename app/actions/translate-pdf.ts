@@ -1,5 +1,6 @@
 "use server";
 
+import path from "node:path";
 import { TranslationServiceClient } from "@google-cloud/translate/build/src/v3";
 import * as deepl from "deepl-node";
 import {
@@ -40,6 +41,11 @@ export async function translatePdfToDocx(
 
   let rawText: string;
   try {
+    const workerPath = path.join(
+      process.cwd(),
+      "node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs"
+    );
+    PDFParse.setWorker(workerPath);
     const parser = new PDFParse({ data: buffer });
     const textResult = await parser.getText();
     rawText = textResult.text?.trim() ?? "";
@@ -87,10 +93,15 @@ export async function translatePdfToDocx(
     return { ok: false, error: "Солонгос → Англи орчуулга амжилтгүй (DeepL)." };
   }
 
-  const projectId =
-    process.env.GOOGLE_CLOUD_PROJECT ?? process.env.GCLOUD_PROJECT;
+  let projectId =
+    (process.env.GOOGLE_CLOUD_PROJECT ?? process.env.GCLOUD_PROJECT)?.trim() ?? "";
+  projectId = projectId.toLowerCase().replace(/[^a-z0-9.-]/g, "");
   if (!projectId) {
-    return { ok: false, error: "Google Cloud тохиргоо дутуу байна (GOOGLE_CLOUD_PROJECT)." };
+    return {
+      ok: false,
+      error:
+        "Google Cloud тохиргоо дутуу байна (GOOGLE_CLOUD_PROJECT). Төслийн ID нь жижиг үсэг, цифр, зураас байна (жишээ: my-project-123).",
+    };
   }
 
   let translatedTextParts: string[];
@@ -115,6 +126,29 @@ export async function translatePdfToDocx(
     }
   } catch (e) {
     console.error("Google Translate error:", e);
+    const msg = e instanceof Error ? e.message : String(e);
+    const code = (e as { code?: number })?.code;
+    if (/default credentials|GOOGLE_APPLICATION_CREDENTIALS|authentication/i.test(msg)) {
+      return {
+        ok: false,
+        error:
+          "Google Cloud нэвтрэл олдсонгүй. .env дотор GOOGLE_APPLICATION_CREDENTIALS=service-account.json гэж тохируулна уу, эсвэл терминалд: gcloud auth application-default login",
+      };
+    }
+    if (/Invalid.*parent|Invalid resource name project id|project id/i.test(msg)) {
+      return {
+        ok: false,
+        error:
+          "GOOGLE_CLOUD_PROJECT буруу байна. Төслийн ID-г ашиглана уу (жижиг үсэг, цифр, зураас л зөвшөөрөгдөнө). Console → Home дээрээс «Project ID»-г харна уу.",
+      };
+    }
+    if (code === 7 || /PERMISSION_DENIED/i.test(msg)) {
+      return {
+        ok: false,
+        error:
+          "Эрх байхгүй (PERMISSION_DENIED). Cloud Translation API идэвхжүүлж, service account-д «Cloud Translation API User» эрх өгнө үү. Заавар: data/README.md",
+      };
+    }
     return { ok: false, error: "Англи → Монгол орчуулга амжилтгүй (Google Translate)." };
   }
 
