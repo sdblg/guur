@@ -9,6 +9,8 @@ import {
   TextRun,
 } from "docx";
 import { PDFParse } from "pdf-parse";
+import { segmentByBibleRefs } from "@/lib/bible-refs";
+import { getVerseText } from "@/lib/mongolian-bible";
 
 const MAX_PDF_SIZE = 10 * 1024 * 1024; // 10 MB
 const ALLOWED_TYPE = "application/pdf";
@@ -51,6 +53,19 @@ export async function translatePdfToDocx(
     return { ok: false, error: "PDF-ээс текст олдсонгүй." };
   }
 
+  // Христийн сургаалын орчуулагч: Библийн эшлэлийг өөрөө орчуулахгүй, Монгол Ариун Библи (2013)-аас үг үсэггүй хуулна.
+  const segments = segmentByBibleRefs(rawText);
+  const DELIM = "\n\n<<<GUUR_SEG>>>\n\n";
+  const textOnly = segments
+    .filter((s): s is { type: "text"; content: string } => s.type === "text")
+    .map((s) => s.content);
+  const verseRefs = segments
+    .filter((s): s is { type: "verse"; ref: import("@/lib/bible-refs").BibleRef } => s.type === "verse")
+    .map((s) => s.ref);
+
+  const toTranslate = textOnly.join(DELIM);
+  const isEmpty = !toTranslate || (textOnly.length === 1 && !textOnly[0].trim());
+
   const deeplKey = process.env.DEEPL_AUTH_KEY;
   if (!deeplKey) {
     return { ok: false, error: "DeepL тохиргоо дутуу байна (DEEPL_AUTH_KEY)." };
@@ -59,11 +74,13 @@ export async function translatePdfToDocx(
   let enText: string;
   try {
     const translator = new deepl.Translator(deeplKey);
-    const result = await translator.translateText(
-      rawText,
-      "ko" as deepl.SourceLanguageCode,
-      "en-US" as deepl.TargetLanguageCode
-    );
+    const result = isEmpty
+      ? { text: "" }
+      : await translator.translateText(
+          toTranslate,
+          "ko" as deepl.SourceLanguageCode,
+          "en-US" as deepl.TargetLanguageCode
+        );
     enText = result.text;
   } catch (e) {
     console.error("DeepL error:", e);
@@ -76,26 +93,49 @@ export async function translatePdfToDocx(
     return { ok: false, error: "Google Cloud тохиргоо дутуу байна (GOOGLE_CLOUD_PROJECT)." };
   }
 
-  let mnText: string;
+  let translatedTextParts: string[];
   try {
-    const translate = new TranslationServiceClient();
-    const location = "global";
-    const [response] = await translate.translateText({
-      parent: `projects/${projectId}/locations/${location}`,
-      contents: [enText],
-      mimeType: "text/plain",
-      sourceLanguageCode: "en",
-      targetLanguageCode: "mn",
-    });
-    const translation = response.translations?.[0];
-    if (!translation?.translatedText) {
-      throw new Error("No translation returned");
+    if (isEmpty) {
+      translatedTextParts = textOnly;
+    } else {
+      const translate = new TranslationServiceClient();
+      const location = "global";
+      const [response] = await translate.translateText({
+        parent: `projects/${projectId}/locations/${location}`,
+        contents: [enText],
+        mimeType: "text/plain",
+        sourceLanguageCode: "en",
+        targetLanguageCode: "mn",
+      });
+      const translation = response.translations?.[0];
+      if (!translation?.translatedText) {
+        throw new Error("No translation returned");
+      }
+      translatedTextParts = translation.translatedText.split(DELIM);
     }
-    mnText = translation.translatedText;
   } catch (e) {
     console.error("Google Translate error:", e);
     return { ok: false, error: "Англи → Монгол орчуулга амжилтгүй (Google Translate)." };
   }
+
+  const verseTexts = await Promise.all(
+    verseRefs.map((ref) => getVerseText(ref))
+  );
+
+  let textPartIndex = 0;
+  let versePartIndex = 0;
+  const finalParts: string[] = [];
+  for (const seg of segments) {
+    if (seg.type === "text") {
+      finalParts.push(translatedTextParts[textPartIndex] ?? seg.content);
+      textPartIndex++;
+    } else {
+      const official = verseTexts[versePartIndex];
+      finalParts.push(official ?? seg.ref.sourceText);
+      versePartIndex++;
+    }
+  }
+  const mnText = finalParts.join("");
 
   const paragraphs = mnText
     .split(/\n+/)
